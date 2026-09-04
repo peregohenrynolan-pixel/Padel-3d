@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #111;
+      user-select: none;
+      -webkit-user-select: none;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    }
+    
+    #score {
+      position: fixed;
+      top: 15px;
+      left: 15px;
+      color: #fff;
+      font-size: 18px;
+      font-weight: bold;
+      z-index: 10;
+      line-height: 1.4;
+      text-shadow: 1px 1px 3px rgba(0,0,0,0.8);
+    }
+
+    #bot-action {
+      position: fixed;
+      top: 70px;
+      left: 15px;
+      color: #ffcc00;
+      font-size: 18px;
+      font-weight: bold;
+      z-index: 10;
+      text-shadow: 1px 1px 3px rgba(0,0,0,0.8);
+      display: none;
+    }
+    
+    #controls {
+      position: fixed;
+      bottom: 20px;
+      left: 20px;
+      width: 150px;
+      height: 150px;
+      z-index: 15;
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      grid-template-rows: repeat(3, 1fr);
+      gap: 6px;
+    }
+
+    .btn {
+      background: rgba(255, 255, 255, 0.25);
+      border: 2px solid rgba(255, 255, 255, 0.6);
+      border-radius: 10px;
+      color: #fff;
+      font-size: 20px;
+      font-weight: bold;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      touch-action: manipulation;
+      backdrop-filter: blur(4px);
+    }
+    .btn:active { background: rgba(255, 255, 255, 0.5); }
+
+    #btn-up { grid-column: 2; grid-row: 1; }
+    #btn-left { grid-column: 1; grid-row: 2; }
+    #btn-down { grid-column: 2; grid-row: 3; }
+    #btn-right { grid-column: 3; grid-row: 2; }
+
+    #game-over {
+      display: none;
+      position: fixed;
+      top: 0; left: 0; width: 100vw; height: 100vh;
+      background: rgba(0, 0, 0, 0.88);
+      color: #fff;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      z-index: 20;
+    }
+    #game-over h1 { font-size: 42px; color: #ff4444; margin-bottom: 10px; text-shadow: 0 0 10px rgba(255,68,68,0.5); }
+    #game-over p { font-size: 20px; margin-bottom: 25px; color: #ddd; }
+    #restart-btn {
+      padding: 14px 28px;
+      font-size: 20px;
+      font-weight: bold;
+      color: #fff;
+      background: linear-gradient(135deg, #0088ff, #0055cc);
+      border: none;
+      border-radius: 8px;
+      box-shadow: 0 4px 12px rgba(0,136,255,0.4);
+      cursor: pointer;
+    }
+  </style>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+  <div id="score">Échanges: 0<br>Vitesse: x1.0</div>
+  <div id="bot-action">Coup du bot: Normal</div>
+  
+  <div id="controls">
+    <div class="btn" id="btn-up">▲</div>
+    <div class="btn" id="btn-left">◀</div>
+    <div class="btn" id="btn-down">▼</div>
+    <div class="btn" id="btn-right">▶</div>
+  </div>
+
+  <div id="game-over">
+    <h1>GAME OVER</h1>
+    <p id="final-score">Échanges réalisés: 0</p>
+    <button id="restart-btn" onclick="restartGame()">RESTART</button>
+  </div>
+
+  <script>
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x4a90e2);
+
+    const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 1000);
+    camera.position.set(0, 9.5, 16.5);
+    camera.lookAt(0, 1, -2);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    document.body.appendChild(renderer.domElement);
+
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+    const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+    dirLight.position.set(8, 18, 8);
+    dirLight.castShadow = true;
+    dirLight.shadow.mapSize.width = 1024;
+    dirLight.shadow.mapSize.height = 1024;
+    scene.add(dirLight);
+
+    const courtMat = new THREE.MeshStandardMaterial({ color: 0x0055cc, roughness: 0.8, metalness: 0.1 });
+    const court = new THREE.Mesh(new THREE.PlaneGeometry(10, 20), courtMat);
+    court.rotation.x = -Math.PI / 2;
+    court.receiveShadow = true;
+    scene.add(court);
+
+    const lineMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+    function createLine(w, h, x, z) {
+      const line = new THREE.Mesh(new THREE.PlaneGeometry(w, h), lineMat);
+      line.rotation.x = -Math.PI / 2;
+      line.position.set(x, 0.02, z);
+      scene.add(line);
+    }
+
+    createLine(0.12, 20, -4.94, 0);
+    createLine(0.12, 20, 4.94, 0);
+    createLine(10, 0.12, 0, -9.94);
+    createLine(10, 0.12, 0, 9.94);
+    createLine(10, 0.12, 0, -7);
+    createLine(10, 0.12, 0, 7);
+    createLine(0.12, 14, 0, 0);
+
+    const net = new THREE.Mesh(new THREE.BoxGeometry(10, 0.88, 0.08), new THREE.MeshStandardMaterial({ color: 0xeeeeee, wireframe: true }));
+    net.position.set(0, 0.44, 0);
+    scene.add(net);
+
+    const gridMat = new THREE.MeshStandardMaterial({ color: 0x333333, wireframe: true });
+    const frameMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.5 });
+
+    function createBackWall(zPos, opacityValue) {
+      const group = new THREE.Group();
+      const glassMat = new THREE.MeshPhysicalMaterial({
+        color: 0xaaddee, transparent: true, opacity: opacityValue, roughness: 0.1, transmission: 0.9, side: THREE.DoubleSide, depthWrite: false
+      });
+      const glass = new THREE.Mesh(new THREE.BoxGeometry(10, 3, 0.08), glassMat);
+      glass.position.set(0, 1.5, zPos);
+      const topFrame = new THREE.Mesh(new THREE.BoxGeometry(10.1, 0.1, 0.1), frameMat);
+      topFrame.position.set(0, 3.05, zPos);
+      topFrame.castShadow = true;
+      group.add(glass, topFrame);
+      return group;
+    }
+    scene.add(createBackWall(-10, 0.25));
+    scene.add(createBackWall(10, 0.06));
+
+    function createSideWalls(xPos) {
+      const group = new THREE.Group();
+      const glassMatSide = new THREE.MeshPhysicalMaterial({ color: 0xaaddee, transparent: true, opacity: 0.2, roughness: 0.1, transmission: 0.8, side: THREE.DoubleSide, depthWrite: false });
+      const glass1 = new THREE.Mesh(new THREE.BoxGeometry(0.08, 3, 4), glassMatSide);
+      glass1.position.set(xPos, 1.5, -8);
+      const glass2 = new THREE.Mesh(new THREE.BoxGeometry(0.08, 3, 4), glassMatSide);
+      glass2.position.set(xPos, 1.5, 8);
+      const fence = new THREE.Mesh(new THREE.BoxGeometry(0.05, 3, 12), gridMat);
+      fence.position.set(xPos, 1.5, 0);
+      const topBeam = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.1, 20), frameMat);
+      topBeam.position.set(xPos, 3.05, 0);
+      topBeam.castShadow = true;
+      group.add(glass1, glass2, fence, topBeam);
+      return group;
+    }
+    scene.add(createSideWalls(-5));
+    scene.add(createSideWalls(5));
+
+    function createPadelRacket() {
+      const racketGroup = new THREE.Group();
+      const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.06, 0.45, 12), new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.8 }));
+      handle.position.y = -0.22;
+      handle.castShadow = true;
+      racketGroup.add(handle);
+
+      const headShape = new THREE.Shape();
+      headShape.absarc(0, 0.42, 0.36, 0, Math.PI * 2, false);
+      const headGeo = new THREE.ExtrudeGeometry(headShape, { depth: 0.07, bevelEnabled: true, bevelSegments: 2, steps: 1, bevelSize: 0.02, bevelThickness: 0.02 });
+      headGeo.center();
+
+      const racketMesh = new THREE.Mesh(headGeo, new THREE.MeshStandardMaterial({ color: 0x1f1f1f, roughness: 0.4, metalness: 0.3 }));
+      racketMesh.position.y = 0.42;
+      racketMesh.castShadow = true;
+      racketGroup.add(racketMesh);
+
+      const faceDecal = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.28, 0.08, 16), new THREE.MeshStandardMaterial({ color: 0xff3300, roughness: 0.3 }));
+      faceDecal.rotation.x = Math.PI / 2;
+      faceDecal.position.y = 0.42;
+      racketGroup.add(faceDecal);
+
+      return racketGroup;
+    }
+
+    function createPlayer(bodyColor) {
+      const group = new THREE.Group();
+      const head = new THREE.Mesh(new THREE.SphereGeometry(0.35, 16, 16), new THREE.MeshStandardMaterial({ color: 0xffcc99, roughness: 0.6 }));
+      head.position.y = 2.3;
+      head.castShadow = true;
+      group.add(head);
+
+      const body = new THREE.Mesh(new THREE.CylinderGeometry(0.38, 0.3, 1.1, 16), new THREE.MeshStandardMaterial({ color: bodyColor, roughness: 0.5 }));
+      body.position.y = 1.4;
+      body.castShadow = true;
+      group.add(body);
+
+      const legs = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.8, 0.38), new THREE.MeshStandardMaterial({ color: 0x111111 }));
+      legs.position.y = 0.5;
+      legs.castShadow = true;
+      group.add(legs);
+
+      const padelRacket = createPadelRacket();
+      padelRacket.position.set(0.6, 1.4, 0.2);
+      padelRacket.rotation.x = Math.PI / 3;
+      group.add(padelRacket);
+
+      return group;
+    }
+
+    const playerGroup = createPlayer(0xee2222);
+    playerGroup.position.set(0, 0, 7);
+    scene.add(playerGroup);
+
+    const botGroup = createPlayer(0x2244ee);
+    botGroup.position.set(0, 0, -8);
+    botGroup.rotation.y = Math.PI;
+    scene.add(botGroup);
+
+    const ball = new THREE.Mesh(
+      new THREE.SphereGeometry(0.22, 16, 16),
+      new THREE.MeshStandardMaterial({ color: 0xccff00, roughness: 0.3, metalness: 0.1 })
+    );
+    ball.castShadow = true;
+    scene.add(ball);
+
+    let ballPos = new THREE.Vector3();
+    let ballVel = new THREE.Vector3();
+    let rallyCount = 0;
+    let speedMultiplier = 1.0;
+    let playerBounceCount = 0;
+    let lastBounceZ = 0;
+    let isGameOver = false;
+    let canBotShoot = true;
+    const baseSpeed = 0.13;
+
+    const moveState = { up: false, down: false, left: false, right: false };
+    const playerSpeed = 0.18;
+
+    function bindBtn(id, dir) {
+      const el = document.getElementById(id);
+      el.addEventListener('touchstart', (e) => { e.preventDefault(); moveState[dir] = true; });
+      el.addEventListener('touchend', (e) => { e.preventDefault(); moveState[dir] = false; });
+      el.addEventListener('mousedown', () => { moveState[dir] = true; });
+      el.addEventListener('mouseup', () => { moveState[dir] = false; });
+    }
+
+    bindBtn('btn-up', 'up');
+    bindBtn('btn-down', 'down');
+    bindBtn('btn-left', 'left');
+    bindBtn('btn-right', 'right');
+
+    const scoreElement = document.getElementById('score');
+    const botActionElement = document.getElementById('bot-action');
+    const gameOverScreen = document.getElementById('game-over');
+    const finalScoreElement = document.getElementById('final-score');
+
+    function resetBall() {
+      playerBounceCount = 0;
+      lastBounceZ = 0;
+      canBotShoot = true;
+      ballPos.set(0, 2.5, -7);
+      ballVel.set((Math.random() - 0.5) * 0.08, 0.14, baseSpeed);
+      botActionElement.style.display = 'none';
+    }
+
+    function triggerGameOver() {
+      isGameOver = true;
+      finalScoreElement.innerText = `Échanges réalisés: ${rallyCount}`;
+      gameOverScreen.style.display = 'flex';
+    }
+
+    function restartGame() {
+      rallyCount = 0;
+      speedMultiplier = 1.0;
+      isGameOver = false;
+      gameOverScreen.style.display = 'none';
+      updateUI();
+      resetBall();
+    }
+
+    function updateUI() {
+      scoreElement.innerHTML = `Échanges: ${rallyCount}<br>Vitesse: x${speedMultiplier.toFixed(1)}`;
+    }
+
+    function displayBotAction(actionText) {
+      botActionElement.innerText = `Coup du bot: ${actionText}`;
+      botActionElement.style.display = 'block';
+    }
+
+    restartGame();
+
+    function animate() {
+      requestAnimationFrame(animate);
+
+      if (!isGameOver) {
+        if (moveState.left) playerGroup.position.x = Math.max(-4.2, playerGroup.position.x - playerSpeed);
+        if (moveState.right) playerGroup.position.x = Math.min(4.2, playerGroup.position.x + playerSpeed);
+        if (moveState.up) playerGroup.position.z = Math.max(1.0, playerGroup.position.z - playerSpeed);
+        if (moveState.down) playerGroup.position.z = Math.min(9.2, playerGroup.position.z + playerSpeed);
+
+        ballVel.y -= 0.006;
+        ballPos.add(ballVel);
+
+        if (ballPos.z < 0) {
+          botGroup.position.x += (ballPos.x - botGroup.position.x) * 0.25;
+        }
+
+        if (ballPos.y <= 0.22 && ballVel.y < 0) {
+          ballPos.y = 0.22;
+          ballVel.y = Math.abs(ballVel.y) * 0.78;
+
+          if (ballPos.z > 0) {
+            lastBounceZ = ballPos.z;
+            playerBounceCount++;
+            if (playerBounceCount >= 2) triggerGameOver();
+          }
+        }
+
+        if (Math.abs(ballPos.x) >= 4.75) {
+          ballPos.x = Math.sign(ballPos.x) * 4.75;
+          ballVel.x = -ballVel.x * 0.85;
+        }
+
+        if (ballPos.z <= -9.8) { 
+          ballPos.z = -9.8; 
+          ballVel.z = -ballVel.z * 0.85; 
+        }
+        
+        if (ballPos.z >= 9.8 && ballPos.y <= 3.0) { 
+          ballPos.z = 9.8; 
+
+          if (lastBounceZ >= 6.5) {
+            ballVel.z = -Math.min(Math.abs(ballVel.z) * 0.35, 0.06); 
+            ballVel.y = 0.05; 
+          } else {
+            ballVel.z = -Math.min(Math.abs(ballVel.z) * 0.55, 0.09); 
+            ballVel.y = 0.04; 
+          }
+        }
+
+        if (ballPos.z >= playerGroup.position.z - 0.6 && ballPos.z <= playerGroup.position.z + 0.6 && Math.abs(ballPos.x - playerGroup.position.x) < 1.3) {
+          ballVel.z = -(baseSpeed * speedMultiplier);
+          ballVel.y = 0.15;
+          ballVel.x = (ballPos.x - playerGroup.position.x) * 0.12;
+
+          playerBounceCount = 0;
+          canBotShoot = true;
+          rallyCount++;
+          if (rallyCount % 10 === 0) speedMultiplier += 0.25;
+          updateUI();
+          botActionElement.style.display = 'none';
+        }
+
+        if (canBotShoot && ballPos.z <= -7.0) {
+          canBotShoot = false;
+          botGroup.position.x = ballPos.x;
+          
+          const rand = Math.random();
+
+          if (rand < 0.35) {
+            ballVel.z = 0.085;
+            ballVel.y = 0.34;
+            displayBotAction("LOB !");
+          } else if (rand < 0.70) {
+            ballVel.z = 0.115;
+            ballVel.y = 0.165;
+            displayBotAction("AMORTI !");
+          } else {
+            ballVel.z = (baseSpeed * speedMultiplier);
+            ballVel.y = 0.15;
+            botActionElement.style.display = 'none';
+          }
+        }
+
+        if (ballPos.z > 11) triggerGameOver();
+
+        ball.position.copy(ballPos);
+      }
+
+      renderer.render(scene, camera);
+    }
+    animate();
+  </script>
+</body>
+</html>
